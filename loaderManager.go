@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -198,6 +200,10 @@ func (l *loaderManager) handleServer() {
 }
 
 func (l *loaderManager) startServer() {
+	// Process os signals
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
 	// basePath := l.config.Install.BaseInstallPath
 
 	// World folder
@@ -256,6 +262,15 @@ func (l *loaderManager) startServer() {
 	if err != nil {
 		log.Error(err)
 	}
+
+	go func(cmd *exec.Cmd) {
+		sig := <-signals
+		log.Infof("Recieved signal %s", sig)
+		log.Info("Stopping server and wait 10 seconds to complete")
+		cmd.Process.Signal(syscall.SIGTERM)
+		time.Sleep(10 * time.Second)
+		os.Exit(0)
+	}(cmd)
 
 	err = cmd.Wait()
 	if err != nil {
