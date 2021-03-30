@@ -2,13 +2,17 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/Strange-Account/go-mc-server-starter/config"
 	"github.com/Strange-Account/go-mc-server-starter/packagetypes"
 
 	log "github.com/sirupsen/logrus"
 )
+
+const AppVersion = "v0.0.2"
 
 // Greeting screen
 func greeting(name string) {
@@ -37,9 +41,15 @@ func checkConnection() bool {
 func main() {
 	// Define program flags
 	configFileFlag := flag.String("c", "server-setup-config.yaml", "Path to server setup config yaml file")
+	versionFlag := flag.Bool("v", false, "Print version info")
 
 	// Parse program flags
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println(AppVersion)
+		os.Exit(0)
+	}
 
 	// Read server setup config
 	myConfig := config.Read(*configFileFlag)
