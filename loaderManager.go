@@ -2,9 +2,7 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -55,24 +53,17 @@ func (l *loaderManager) installLoader(loaderVersion string, mcVersion string, in
 		log.Fatal(err)
 	}
 
-	// cmd_prep := "java -jar " + absInstallerPath
-	var args []string
+	args := installerArguments
 	args = append(args, "-jar", absInstallerPath)
-	args = append(args, installerArguments...)
+
 	cmd := exec.Command("java", args...)
 	cmd.Dir = l.basePath
-
-	var stdBuffer bytes.Buffer
-	mw := io.MultiWriter(os.Stdout, &stdBuffer)
-
-	cmd.Stdout = mw
-	cmd.Stderr = mw
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
 		log.Fatal(err)
 	}
-
-	log.Info(stdBuffer.String())
 
 	log.Info("Done installing loader, deleting installer!")
 
@@ -86,15 +77,16 @@ func (l *loaderManager) installLoader(loaderVersion string, mcVersion string, in
 		log.Fatal(err)
 	}
 
-	l.checkEULA()
+	checkEULA(l.basePath)
 }
 
-func (l *loaderManager) checkEULA() {
-	eulaFile := filepath.Join(l.basePath, "eula.txt")
+func checkEULA(basePath string) {
 	var lines []string
 
-	if _, err := os.Stat(eulaFile); err == nil {
-		f, err := os.Open(eulaFile)
+	eulaFilePath := filepath.Join(basePath, "eula.txt")
+
+	if _, err := os.Stat(eulaFilePath); err == nil {
+		f, err := os.Open(eulaFilePath)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -108,28 +100,10 @@ func (l *loaderManager) checkEULA() {
 		if err := scanner.Err(); err != nil {
 			log.Fatal(err)
 		}
-		f.Close()
 	} else if os.IsNotExist(err) {
-		f, err := os.Create(eulaFile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer f.Close()
-
 		lines = append(lines, "#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://account.mojang.com/documents/minecraft_eula).")
 		lines = append(lines, "#"+time.Now().Format("E MMM d HH:mm:ss O y"))
 		lines = append(lines, "eula=false")
-
-		w := bufio.NewWriter(f)
-		for _, line := range lines {
-			fmt.Fprintln(w, line)
-		}
-
-		err = w.Flush()
-		if err != nil {
-			log.Fatal(err)
-		}
-		f.Close()
 	} else {
 		log.Fatal(err)
 	}
@@ -140,11 +114,11 @@ func (l *loaderManager) checkEULA() {
 		log.Info("Read it at https://account.mojang.com/documents/minecraft_eula before accepting it.")
 		reader := bufio.NewReader(os.Stdin)
 		text, _ := reader.ReadString('\n')
-		if strings.Contains(strings.ToLower(text), "true") {
+		if strings.ToLower(text) == "true" {
 			log.Info("You have accepted the EULA.")
 			lines[2] = "eula=true"
 
-			f, err := os.Create(eulaFile)
+			f, err := os.Create(eulaFilePath)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -159,7 +133,6 @@ func (l *loaderManager) checkEULA() {
 			if err != nil {
 				log.Fatal(err)
 			}
-			f.Close()
 		}
 	}
 }
@@ -193,6 +166,11 @@ func (l *loaderManager) handleServer() {
 		}
 		startTimes = tempStartTimes
 		log.Errorf("Server crashed %d times in the last %s.", len(startTimes), l.launchConfig.CrashTimer)
+
+		if !l.launchConfig.AutoRestart {
+			return
+		}
+
 		log.Info("Restarting in 10 Seconds")
 		log.Info("Press Ctrl+C to cancel.")
 		time.Sleep(10 * time.Second)
@@ -263,14 +241,14 @@ func (l *loaderManager) startServer() {
 		log.Error(err)
 	}
 
-	go func(cmd *exec.Cmd) {
+	go func(cmd *exec.Cmd, launchConfig *config.LaunchConfig) {
 		sig := <-signals
 		log.Infof("Recieved signal %s", sig)
 		log.Info("Stopping server and wait 10 seconds to complete")
 		cmd.Process.Signal(syscall.SIGTERM)
+		launchConfig.AutoRestart = false
 		time.Sleep(10 * time.Second)
-		os.Exit(0)
-	}(cmd)
+	}(cmd, &l.launchConfig)
 
 	err = cmd.Wait()
 	if err != nil {
