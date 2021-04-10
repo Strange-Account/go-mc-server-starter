@@ -15,6 +15,7 @@ import (
 	"github.com/Strange-Account/go-mc-server-starter/config"
 	"github.com/Strange-Account/go-mc-server-starter/utils"
 	"github.com/gobwas/glob"
+	"github.com/remeh/sizedwaitgroup"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -55,59 +56,89 @@ func (p *cursePackType) InstallPack() {
 		url := p.config.Install.ModpackUrl
 		os.MkdirAll(p.basePath, os.ModePerm)
 
-		modsPath := filepath.Join(p.basePath, "mods")
-		oldModsPath := filepath.Join(p.basePath, "old-mods")
+		log.Info("Backup old files")
+		backupOldFiles(p.basePath)
 
-		if _, err := os.Stat(modsPath); !os.IsNotExist(err) {
-			if _, err := os.Stat(oldModsPath); !os.IsNotExist(err) {
-				err := os.RemoveAll(oldModsPath)
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-			err := os.Rename(modsPath, oldModsPath)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-		err := os.MkdirAll(modsPath, os.ModePerm)
-		if err != nil {
-			log.Fatal(err)
+		downloadPack(p.basePath, url)
+
+		log.Info("Processing Modpack")
+		processModPack(p.basePath, p.config.Install.IgnoreFiles)
+
+		log.Info("Processing manifest")
+		mcVersion, forgeVersion, mods := processManifest(p.basePath, p.config.Install.FormatSpecific.IgnoreProject)
+
+		if p.mcVersion == "" {
+			p.mcVersion = mcVersion
 		}
 
-		log.Info("Attempting to download modpack Zip.")
-
-		modpackPath := filepath.Join(p.basePath, "modpack-download.zip")
-		utils.DownloadFile(modpackPath, url)
-
-		absModpackPath, err := filepath.Abs(modpackPath)
-		if err != nil {
-			log.Fatal(err)
+		if p.forgeVersion == "" {
+			p.forgeVersion = forgeVersion
 		}
-		log.Infof("Downloaded the modpack zip file to %s", absModpackPath)
 
-		log.Debugf("Unpacking modpack to %s", p.basePath)
-		absBasePath, err := filepath.Abs(p.basePath)
-		if err != nil {
-			log.Fatal(err)
-		}
-		utils.Unzip(absModpackPath, absBasePath)
-
-		p.postProcess()
+		log.Info("Downloading mods")
+		downloadMods(p.basePath, mods, p.config.Install.IgnoreFiles)
 	}
 }
 
-func (p *cursePackType) postProcess() {
-	mods := []Files{}
+func backupOldFiles(basePath string) {
+	oldFilesPath := filepath.Join(basePath, "OLD_FILES_TO_DELETE")
+	modsPath := filepath.Join(basePath, "mods")
+	configPath := filepath.Join(basePath, "config")
+	kubeJSPath := filepath.Join(basePath, "kubejs")
+
+	err := os.RemoveAll(oldFilesPath)
+	if err != nil {
+		log.Error(err)
+	}
+
+	err = os.MkdirAll(oldFilesPath, os.ModePerm)
+	if err != nil {
+		log.Error(err)
+	}
+
+	err = os.Rename(modsPath, filepath.Join(oldFilesPath, "mods"))
+	if err != nil {
+		log.Error(err)
+	}
+
+	err = os.Rename(configPath, filepath.Join(oldFilesPath, "config"))
+	if err != nil {
+		log.Error(err)
+	}
+
+	err = os.Rename(kubeJSPath, filepath.Join(oldFilesPath, "kubejs"))
+	if err != nil {
+		log.Error(err)
+	}
+}
+
+func downloadPack(basePath string, url string) {
+
+	log.Infof("Attempting to download modpack Zip from %s.", url)
+	modpackPath := filepath.Join(basePath, "modpack-download.zip")
+	utils.DownloadFile(modpackPath, url)
+
+	log.Infof("Unpacking modpack to %s", basePath)
+	absBasePath, err := filepath.Abs(basePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = utils.Unzip(modpackPath, absBasePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func processModPack(basePath string, ignoreFiles []string) {
 	var globs []glob.Glob
 
-	log.Info("Post-processing overrides")
+	log.Info("Processing overrides")
 
-	for _, ignoreFile := range p.config.Install.IgnoreFiles {
+	for _, ignoreFile := range ignoreFiles {
 		globs = append(globs, glob.MustCompile(ignoreFile))
 	}
 
-	overridesPath := filepath.Join(p.config.Install.BaseInstallPath, "overrides")
+	overridesPath := filepath.Join(basePath, "overrides")
 	err := filepath.Walk(overridesPath,
 		func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -138,9 +169,15 @@ func (p *cursePackType) postProcess() {
 
 	log.Info("Remove override directory")
 	os.RemoveAll(overridesPath)
+}
 
-	log.Infof("Reading manifest file: %s", filepath.Join(p.basePath, "manifest.json"))
-	jsonFile, err := os.Open(filepath.Join(p.basePath, "manifest.json"))
+func processManifest(basePath string, ignoreProjects []int) (mcVersion, forgeVersion string, mods []Files) {
+
+	mods = []Files{}
+
+	manifestFile := filepath.Join(basePath, "manifest.json")
+	log.Infof("Reading manifest file: %s", manifestFile)
+	jsonFile, err := os.Open(manifestFile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -151,16 +188,13 @@ func (p *cursePackType) postProcess() {
 	byteValue, _ := ioutil.ReadAll(jsonFile)
 	json.Unmarshal(byteValue, &manifest)
 
-	if p.mcVersion == "" {
-		p.mcVersion = manifest.Minecraft.Version
-	}
-
-	if p.forgeVersion == "" && len(manifest.Minecraft.ModLoaders) > 0 {
-		p.forgeVersion = manifest.Minecraft.ModLoaders[0].Id[6:]
+	mcVersion = manifest.Minecraft.Version
+	if len(manifest.Minecraft.ModLoaders) > 0 {
+		forgeVersion = manifest.Minecraft.ModLoaders[0].Id[6:]
 	}
 
 	for _, modFile := range manifest.Files {
-		ok, _ := in_array(modFile.ProjectID, p.config.Install.FormatSpecific.IgnoreProject)
+		ok, _ := in_array(modFile.ProjectID, ignoreProjects)
 		if !ok {
 			log.Debug("Adding project %d - file %d to file list", modFile.ProjectID, modFile.FileID)
 			mods = append(mods, modFile)
@@ -169,11 +203,13 @@ func (p *cursePackType) postProcess() {
 		}
 	}
 
-	p.downloadMods(mods)
+	return mcVersion, forgeVersion, mods
 }
 
-func (p *cursePackType) downloadMods(mods []Files) {
+func downloadMods(basePath string, mods []Files, ignoreFiles []string) {
 	var downloadsUrls []string
+
+	os.MkdirAll(filepath.Join(basePath, "mods"), os.ModePerm)
 
 	for _, modFile := range mods {
 		url := "https://cursemeta.dries007.net/" +
@@ -204,12 +240,8 @@ func (p *cursePackType) downloadMods(mods []Files) {
 		downloadsUrls = append(downloadsUrls, result["DownloadURL"].(string))
 	}
 
-	p.processMods(downloadsUrls)
-}
-
-func (p *cursePackType) processMods(mods []string) {
 	ignorePatterns := []*regexp.Regexp{}
-	for _, ignoreFiles := range p.config.Install.IgnoreFiles {
+	for _, ignoreFiles := range ignoreFiles {
 		if strings.HasPrefix(ignoreFiles, "mods/") {
 			pattern, err := regexp.Compile(ignoreFiles[strings.LastIndex(ignoreFiles, "/")+1:])
 			if err != nil {
@@ -219,21 +251,37 @@ func (p *cursePackType) processMods(mods []string) {
 		}
 	}
 
-	for i, mod := range mods {
+	swg := sizedwaitgroup.New(5)
+	for i, mod := range downloadsUrls {
 		modName := path.Base(mod)
+
+		ignored := false
 		for _, ignorePattern := range ignorePatterns {
 			if ignorePattern.MatchString(modName) {
-				log.Infof("(%d/%d) Skipped ignored mod: %s", i, len(mods)-1, modName)
-			} else {
-				destPath := filepath.Join(p.config.Install.BaseInstallPath, "mods", modName)
-				log.Infof("(%d/%d) Loading mod %s ", i, len(mods)-1, modName)
-				err := utils.DownloadFile(destPath, mod)
-				if err != nil {
-					log.Error(err)
-				}
+				ignored = true
 			}
 		}
 
+		if !ignored {
+			log.Infof("(%d/%d) Loading mod %s ", i+1, len(mods), modName)
+			swg.Add()
+			go downloadSingleMod(basePath, mod, &swg)
+		} else {
+			log.Infof("(%d/%d) Skipped ignored mod: %s", i+1, len(mods), modName)
+		}
+	}
+
+	swg.Wait()
+}
+
+func downloadSingleMod(basePath string, url string, swg *sizedwaitgroup.SizedWaitGroup) {
+	defer swg.Done()
+
+	modName := path.Base(url)
+	destPath := filepath.Join(basePath, "mods", modName)
+	err := utils.DownloadFile(destPath, url)
+	if err != nil {
+		log.Error(err)
 	}
 }
 

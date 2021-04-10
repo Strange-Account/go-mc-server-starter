@@ -53,8 +53,9 @@ func (l *loaderManager) installLoader(loaderVersion string, mcVersion string, in
 		log.Fatal(err)
 	}
 
-	args := installerArguments
+	var args []string
 	args = append(args, "-jar", absInstallerPath)
+	args = append(args, installerArguments...)
 
 	cmd := exec.Command("java", args...)
 	cmd.Dir = l.basePath
@@ -108,6 +109,16 @@ func checkEULA(basePath string) {
 		log.Fatal(err)
 	}
 
+	envEula := strings.ToLower(os.Getenv("EULA"))
+	if envEula == "true" {
+		lines[2] = "eula=true"
+		err := writeEula(basePath, lines)
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	if len(lines) > 2 && !strings.Contains(lines[2], "true") {
 		log.Info("You have not accepted the eula yet.")
 		log.Info("By typing TRUE you are indicating your agreement to the EULA of Mojang.")
@@ -118,18 +129,7 @@ func checkEULA(basePath string) {
 			log.Info("You have accepted the EULA.")
 			lines[2] = "eula=true"
 
-			f, err := os.Create(eulaFilePath)
-			if err != nil {
-				log.Fatal(err)
-			}
-			defer f.Close()
-
-			w := bufio.NewWriter(f)
-			for _, line := range lines {
-				fmt.Fprintln(w, line)
-			}
-
-			err = w.Flush()
+			err := writeEula(basePath, lines)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -140,6 +140,8 @@ func checkEULA(basePath string) {
 func (l *loaderManager) handleServer() {
 	var startTimes []time.Time
 	counter := 0
+
+	checkEULA(l.basePath)
 
 	crashLimit := l.launchConfig.CrashLimit
 	crashTimer, err := time.ParseDuration(l.launchConfig.CrashTimer)
@@ -254,4 +256,20 @@ func (l *loaderManager) startServer() {
 	if err != nil {
 		log.Error(err)
 	}
+}
+
+func writeEula(basePath string, content []string) error {
+	eulaFilePath := filepath.Join(basePath, "eula.txt")
+
+	f, err := os.Create(eulaFilePath)
+	defer f.Close()
+
+	w := bufio.NewWriter(f)
+	for _, line := range content {
+		fmt.Fprintln(w, line)
+	}
+
+	err = w.Flush()
+
+	return err
 }

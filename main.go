@@ -12,7 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const AppVersion = "v0.0.2"
+const AppVersion = "v0.0.3"
 
 // Greeting screen
 func greeting(name string) {

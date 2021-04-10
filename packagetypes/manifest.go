@@ -4,9 +4,9 @@ type Manifest struct {
 	Minecraft       Minecraft `json:"minecraft"`
 	ManifestType    string    `json:"manifestType"`
 	ManifestVersion int       `json:"manifestVersion"`
-	Name            string    `json:"name": "ATM6 to the Sky"`
-	Version         string    `json:"version": "1.0.5"`
-	Author          string    `json:"author": "White_Phant0m & oly2o6"`
+	Name            string    `json:"name"`
+	Version         string    `json:"version"`
+	Author          string    `json:"author"`
 	Files           []Files   `json:"files"`
 }
 
